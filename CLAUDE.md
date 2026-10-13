@@ -44,6 +44,8 @@ automation consumers. Open-source project (MIT).
 - Nothing UI-only: any data the panel shows must come from `/api/v1/*`.
 - Detected process technology (`kind`) is only what the binary name
   honestly reveals — never guess an app's purpose.
-- Deploys: push to `main` → GitHub Actions (axolutions/webo-deploy) →
-  GHCR → the server pulls. `deploy/docker-compose.yml` is the generic
-  OSS compose; `deploy/docker-compose.homelab.yml` is our overlay.
+- Apps webo deploys: push to `main` → GitHub Actions (`deploy-action/`) →
+  GHCR → the server pulls over Tailscale SSH. `deploy/docker-compose.yml` is
+  webo's own compose; `deploy/docker-compose.tunnel.yml` exposes it through a
+  Cloudflare Tunnel. Anything specific to one server (domain, tunnel, Tailscale
+  address, runbook) is configuration on that server, never code in this repo.

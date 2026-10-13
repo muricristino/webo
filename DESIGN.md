@@ -74,7 +74,7 @@ Two faces, loaded from Google Fonts:
 - **IBM Plex Sans** (400/500/600/700) — everything by default.
 - **IBM Plex Mono** (400/500), via `var(--mono)` — anything machine-flavored:
   slugs, hashes, env keys/values, SQL, logs, table headers, badges like
-  `RD-007661`.
+  the hostname.
 
 Scale (there is no h1–h6; hierarchy is size + weight + color):
 
