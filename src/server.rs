@@ -144,6 +144,14 @@ async fn docker_info(AxumState(api): AxumState<Api>) -> impl IntoResponse {
     Json(api.state.read().await.docker)
 }
 
+fn runtime_of(p: &crate::store::Project) -> &'static str {
+    if crate::pm2::is_pm2(p.compose_project.as_deref()) {
+        "pm2"
+    } else {
+        "docker"
+    }
+}
+
 async fn projects_list(AxumState(api): AxumState<Api>) -> impl IntoResponse {
     let rows = api.store.projects().unwrap_or_default();
     let st = api.state.read().await;
@@ -173,6 +181,7 @@ async fn projects_list(AxumState(api): AxumState<Api>) -> impl IntoResponse {
                 "domain": p.domain,
                 "url": p.custom_domain.clone().or_else(|| p.auto_domain.clone()).map(|h| format!("https://{h}")),
                 "tech": p.tech,
+                "runtime": runtime_of(p),
                 "status": p.status,
                 "running": live.is_some(),
                 "containers": live.map(|l| l.containers.len()).unwrap_or(0),
@@ -403,11 +412,22 @@ async fn project_provision(
 
 /// The first deploy, start to finish. HTTP and MCP both call this — the order
 /// of operations here is load-bearing and must not exist twice.
+pub(crate) fn refuse_pm2(api: &Api, slug: &str) -> Result<(), (StatusCode, String)> {
+    match api.store.project_by_slug(slug) {
+        Ok(Some(p)) if crate::pm2::is_pm2(p.compose_project.as_deref()) => Err((
+            StatusCode::CONFLICT,
+            "this app runs under pm2 on the host: webo only watches it".into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
 pub(crate) async fn do_provision(
     api: &Api,
     slug: &str,
     req: ProvisionReq,
 ) -> Result<serde_json::Value, (StatusCode, String)> {
+    refuse_pm2(api, slug)?;
     let Some(token) = github_token() else {
         return Err((StatusCode::SERVICE_UNAVAILABLE, "github token not configured".into()));
     };
@@ -545,6 +565,7 @@ pub(crate) async fn do_delete_project(
     if slug == "webo" {
         return Err((StatusCode::FORBIDDEN, "webo cannot delete itself".into()));
     }
+    refuse_pm2(api, slug)?;
     let Ok(Some(p)) = api.store.project_by_slug(slug) else {
         return Err((StatusCode::NOT_FOUND, "project not found".into()));
     };
@@ -655,6 +676,7 @@ pub(crate) async fn do_connect_domain(
     slug: &str,
     domain: &str,
 ) -> Result<serde_json::Value, (StatusCode, String)> {
+    refuse_pm2(api, slug)?;
     let Some(cf) = cloudflare::Cloudflare::from_env() else {
         return Err((StatusCode::SERVICE_UNAVAILABLE, "cloudflare not configured".into()));
     };
@@ -781,6 +803,9 @@ async fn database_create(
     let Ok(Some(p)) = api.store.project_by_slug(&slug) else {
         return err(StatusCode::NOT_FOUND, "project not found");
     };
+    if let Err((code, msg)) = refuse_pm2(&api, &slug) {
+        return err(code, &msg);
+    }
     if api.store.database(p.id).ok().flatten().is_some() {
         return err(StatusCode::CONFLICT, "this project already has a database");
     }
@@ -1763,6 +1788,28 @@ pub(crate) mod tests {
         assert_eq!(res.headers()["allow"], "POST");
 
         assert_eq!(call(api.clone(), "POST", "/mcp", None).await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_pm2_app_is_listed_as_such_and_never_changed() {
+        let api = api_with_data();
+        api.store.upsert_discovered("pm2-jobs", "pm2:jobs", None, None, 1).unwrap();
+        let (_, list) = get_on(api.clone(), "/api/v1/projects").await;
+        let projects = list["projects"].as_array().unwrap();
+        let jobs = projects.iter().find(|p| p["slug"] == "pm2-jobs").unwrap();
+        assert_eq!(jobs["runtime"], "pm2");
+        assert_eq!(projects.iter().find(|p| p["slug"] == "codo").unwrap()["runtime"], "docker");
+
+        let refused = |r: Result<serde_json::Value, (StatusCode, String)>| {
+            let (code, msg) = r.unwrap_err();
+            assert_eq!(code, StatusCode::CONFLICT);
+            assert!(msg.contains("pm2"), "{msg}");
+        };
+        refused(do_delete_project(&api, "pm2-jobs", projects::TeardownOpts::default()).await);
+        refused(do_connect_domain(&api, "pm2-jobs", "jobs.example.com").await);
+        refused(do_provision(&api, "pm2-jobs", ProvisionReq::default()).await);
+        assert_eq!(call(api.clone(), "POST", "/api/v1/projects/pm2-jobs/database", None).await, StatusCode::CONFLICT);
+        assert!(refuse_pm2(&api, "codo").is_ok());
     }
 
     #[tokio::test]

@@ -11,6 +11,7 @@ pub mod onboarding;
 pub mod metrics;
 pub mod net;
 pub mod persist;
+pub mod pm2;
 pub mod projects;
 pub mod scaffold;
 pub mod server;

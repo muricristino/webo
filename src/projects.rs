@@ -108,6 +108,7 @@ pub async fn run(state: Arc<RwLock<State>>, store: Arc<Store>, sample_secs: u64)
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut ticks: u64 = 0;
     let mut volume_sizes: HashMap<String, u64> = HashMap::new();
+    let mut pm2_prev: HashMap<String, u64> = HashMap::new();
 
     loop {
         tick.tick().await;
@@ -297,7 +298,32 @@ pub async fn run(state: Arc<RwLock<State>>, store: Arc<Store>, sample_secs: u64)
         }
         prev.retain(|k, _| seen_ids.contains(k));
 
+        if let Some(home) = crate::pm2::home() {
+            for (app, live) in crate::pm2::collect(&home, std::path::Path::new("/proc"), &mut pm2_prev, sample_secs) {
+                let slug = crate::pm2::slug(&app.name);
+                group_meta.insert(slug.clone(), (crate::pm2::compose_key(&app.name), None, None, Some(crate::pm2::tech_of(&app))));
+                if let Some(live) = live {
+                    groups.insert(slug, live);
+                }
+            }
+        }
+
+        // persist discoveries (never clobbering user-made links)
+        for (slug, (compose, repo, domain, tech)) in &group_meta {
+            let _ = store.upsert_discovered(
+                slug,
+                compose,
+                repo.as_ref().map(|(o, n)| (o.as_str(), n.as_str())),
+                domain.as_deref(),
+                now as i64,
+            );
+            if let Some(t) = tech {
+                let _ = store.set_tech_if_empty(slug, t);
+            }
+        }
+
         // merge into shared state, carrying history forward
+        let alive: std::collections::HashSet<String> = groups.keys().cloned().collect();
         let mut st = state.write().await;
         for (slug, mut live) in groups {
             let sample = ProjectSample { ts: now, cpu_pct: live.cpu_pct, mem_bytes: live.mem_bytes, disk_bps: live.disk_bps };
@@ -323,7 +349,7 @@ pub async fn run(state: Arc<RwLock<State>>, store: Arc<Store>, sample_secs: u64)
             live.container_history.retain(|name, _| alive.contains(name));
             st.projects_live.insert(slug, live);
         }
-        st.projects_live.retain(|slug, _| group_meta.contains_key(slug));
+        st.projects_live.retain(|slug, _| alive.contains(slug));
     }
 }
 
