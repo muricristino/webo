@@ -200,10 +200,74 @@ pub async fn tail(container: &str, lines: usize) -> Vec<LogLine> {
     out
 }
 
+pub fn index(store: &Store, project_id: i64, lines: &[LogLine]) {
+    let _ = store.insert_logs(project_id, lines);
+    // the same lines feed error tracking, so every app gets it without
+    // installing anything; the stack frames that follow an error travel with
+    // it as one occurrence
+    for (i, message) in error_blocks(lines) {
+        let l = &lines[i];
+        // fingerprint the cleaned title, not the raw line: the same bug logged
+        // by the app and by the framework must land on one issue
+        let title = crate::errors::title_of(&l.line);
+        let _ = store.record_error(
+            project_id,
+            &crate::errors::fingerprint(&title),
+            &title,
+            "server",
+            &l.container,
+            &message,
+            l.ts,
+            crate::errors::culprit_of(&message).as_deref(),
+        );
+    }
+}
+
+pub fn read_pm2(
+    store: &Store,
+    project: &crate::store::Project,
+    home: &std::path::Path,
+    offsets: &mut std::collections::HashMap<std::path::PathBuf, u64>,
+    now: i64,
+) {
+    let Some(name) = project.compose_project.as_deref().and_then(|c| c.strip_prefix(crate::pm2::MARK)) else {
+        return;
+    };
+    let Some(app) = crate::pm2::read_apps(home).into_iter().find(|a| a.name == name) else { return };
+    let indexed = store.last_log_ts(project.id, &app.name).ok().flatten().is_some();
+    for (file, stream) in [(&app.out_log, "stdout"), (&app.err_log, "stderr")] {
+        if file.is_empty() {
+            continue;
+        }
+        let path = home.join("logs").join(file);
+        let offset = match offsets.get(&path) {
+            Some(o) => *o,
+            None => {
+                let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                crate::pm2::start_offset(len, indexed)
+            }
+        };
+        let Some((text, from)) = crate::pm2::read_from(&path, offset) else { continue };
+        let (raw, consumed) = crate::pm2::complete_lines(&text);
+        offsets.insert(path, from + consumed as u64);
+        let lines: Vec<LogLine> = raw
+            .into_iter()
+            .map(|r| {
+                let (ts, line) = crate::pm2::parse_line(r, now);
+                LogLine { ts, container: app.name.clone(), stream: stream.to_string(), line }
+            })
+            .collect();
+        if !lines.is_empty() {
+            index(store, project.id, &lines);
+        }
+    }
+}
+
 pub async fn run(store: Arc<Store>, every_secs: u64) {
     let Ok(docker) = Docker::connect_with_unix_defaults() else { return };
     let mut tick = tokio::time::interval(Duration::from_secs(every_secs));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut pm2_offsets: std::collections::HashMap<std::path::PathBuf, u64> = std::collections::HashMap::new();
     loop {
         tick.tick().await;
         let Ok(projects) = store.projects() else { continue };
@@ -213,7 +277,19 @@ pub async fn run(store: Arc<Store>, every_secs: u64) {
         else {
             continue;
         };
+        let pm2_home = crate::pm2::home();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
         for p in projects {
+            if crate::pm2::is_pm2(p.compose_project.as_deref()) {
+                if let Some(home) = &pm2_home {
+                    read_pm2(&store, &p, home, &mut pm2_offsets, now);
+                    let _ = store.prune_logs(p.id, MAX_BYTES_PER_PROJECT);
+                }
+                continue;
+            }
             let compose = p.compose_project.clone().unwrap_or_else(|| p.slug.clone());
             for c in &containers {
                 let Some(id) = c.id.clone() else { continue };
@@ -241,27 +317,7 @@ pub async fn run(store: Arc<Store>, every_secs: u64) {
                     .into_iter()
                     .map(|(ts, stream, line)| LogLine { ts, container: name.clone(), stream, line })
                     .collect();
-                let _ = store.insert_logs(p.id, &lines);
-                // the same lines feed error tracking, so every app gets it
-                // without installing anything; the stack frames that follow an
-                // error travel with it as one occurrence
-                for (i, message) in error_blocks(&lines) {
-                    let l = &lines[i];
-                    // fingerprint the cleaned title, not the raw line: the
-                    // same bug logged by the app and by the framework must
-                    // land on one issue
-                    let title = crate::errors::title_of(&l.line);
-                    let _ = store.record_error(
-                        p.id,
-                        &crate::errors::fingerprint(&title),
-                        &title,
-                        "server",
-                        &l.container,
-                        &message,
-                        l.ts,
-                        crate::errors::culprit_of(&message).as_deref(),
-                    );
-                }
+                index(&store, p.id, &lines);
             }
             let _ = store.prune_logs(p.id, MAX_BYTES_PER_PROJECT);
         }
@@ -477,5 +533,55 @@ mod tests {
             "stderr is labelled: {lines:?}"
         );
         let _ = std::process::Command::new("docker").args(["rm", "-f", &name]).output();
+    }
+
+    #[test]
+    fn pm2_logs_are_indexed_once_and_errors_tracked() {
+        let home = std::env::temp_dir().join(format!("webo-pm2-logs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("logs")).unwrap();
+        std::fs::write(
+            home.join("dump.pm2"),
+            r#"[{"name":"api","pm_out_log_path":"/root/.pm2/logs/api-out.log","pm_err_log_path":"/root/.pm2/logs/api-error.log"}]"#,
+        )
+        .unwrap();
+        std::fs::write(home.join("logs/api-out.log"), "2026-10-13T20:30:01: listening on 3000\npartial").unwrap();
+        std::fs::write(home.join("logs/api-error.log"), "TypeError: x is undefined\n    at handler (/opt/api/server.js:10:5)\n").unwrap();
+
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_discovered("pm2-api", "pm2:api", None, None, 1).unwrap();
+        let p = store.project_by_slug("pm2-api").unwrap().unwrap();
+        let mut offsets = std::collections::HashMap::new();
+
+        read_pm2(&store, &p, &home, &mut offsets, 1_800_000_000);
+        let lines = store.search_logs(p.id, None, Some("api"), None, 100).unwrap();
+        assert_eq!(lines.len(), 3, "the partial line waits for its newline: {lines:?}");
+        assert!(lines.iter().any(|l| l.ts == 1_791_923_401 && l.line == "listening on 3000"));
+        assert!(lines.iter().any(|l| l.stream == "stderr"));
+        assert_eq!(store.issues(p.id, None).unwrap().len(), 1, "the error became an issue");
+
+        read_pm2(&store, &p, &home, &mut offsets, 1_800_000_001);
+        assert_eq!(store.search_logs(p.id, None, Some("api"), None, 100).unwrap().len(), 3, "nothing read twice");
+
+        std::fs::write(home.join("logs/api-out.log"), "2026-10-13T20:30:01: listening on 3000\npartial line now done\n").unwrap();
+        read_pm2(&store, &p, &home, &mut offsets, 1_800_000_002);
+        assert_eq!(store.search_logs(p.id, None, Some("api"), None, 100).unwrap().len(), 4);
+
+        let mut fresh = std::collections::HashMap::new();
+        read_pm2(&store, &p, &home, &mut fresh, 1_800_000_003);
+        assert_eq!(
+            store.search_logs(p.id, None, Some("api"), None, 100).unwrap().len(),
+            4,
+            "after a restart webo does not index the files again"
+        );
+
+        store.upsert_discovered("codo", "codo", None, None, 1).unwrap();
+        let docker = store.project_by_slug("codo").unwrap().unwrap();
+        read_pm2(&store, &docker, &home, &mut offsets, 1);
+        store.upsert_discovered("pm2-ghost", "pm2:ghost", None, None, 1).unwrap();
+        let ghost = store.project_by_slug("pm2-ghost").unwrap().unwrap();
+        read_pm2(&store, &ghost, &home, &mut offsets, 1);
+        assert!(store.search_logs(ghost.id, None, None, None, 10).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(home);
     }
 }

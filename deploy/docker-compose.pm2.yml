@@ -1,0 +1,9 @@
+# Lists the host's pm2 apps (read-only). Add it to the other compose files:
+#   docker compose -f docker-compose.yml -f docker-compose.pm2.yml up -d --build
+# PM2_HOME_ON_HOST is the host's PM2_HOME (default /root/.pm2).
+services:
+  webo:
+    environment:
+      - WEBO_PM2_HOME=/host/pm2
+    volumes:
+      - ${PM2_HOME_ON_HOST:-/root/.pm2}:/host/pm2:ro
