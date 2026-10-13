@@ -699,7 +699,7 @@ mod tests {
 
         std::env::set_var("WEBO_GITHUB_API_BASE", format!("http://{addr}"));
         let store = Store::open_in_memory().unwrap();
-        store.upsert_discovered("webo", "webo", Some(("axolutions", "webo")), None, 1).unwrap();
+        store.upsert_discovered("webo", "webo", Some(("acme", "webo")), None, 1).unwrap();
         store.upsert_discovered("norepo", "norepo", None, None, 1).unwrap();
         tokio::task::block_in_place(|| sync_once(&store, "test-token"));
         std::env::remove_var("WEBO_GITHUB_API_BASE");

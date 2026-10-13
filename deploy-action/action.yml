@@ -1,0 +1,136 @@
+name: webo-deploy
+description: Build the app image on GHCR and deploy it to a webo server over Tailscale SSH
+
+inputs:
+  app:
+    description: "App folder name under apps-dir on the server"
+    required: true
+  dockerfile:
+    description: "Dockerfile path in the repo"
+    required: false
+    default: Dockerfile
+  context:
+    description: "Build context"
+    required: false
+    default: "."
+  compose_files:
+    description: "Compose files to copy and run on the server, space-separated"
+    required: false
+    default: docker-compose.yml
+  service:
+    description: "Compose service to update (empty = all)"
+    required: false
+    default: ""
+  github-token:
+    description: "The app repo's GITHUB_TOKEN, used to push the image to GHCR"
+    required: true
+  host:
+    description: "SSH target on the tailnet, as user@address (empty = build only, no deploy)"
+    required: false
+    default: ""
+  apps-dir:
+    description: "Directory on the server that holds one folder per app"
+    required: false
+    default: "~/apps"
+  ts-oauth-client-id:
+    description: "Tailscale OAuth client (empty = build only, no deploy)"
+    required: false
+    default: ""
+  ts-oauth-secret:
+    description: "Tailscale OAuth secret"
+    required: false
+    default: ""
+  ts-tags:
+    description: "Tailscale tags the runner joins the tailnet with"
+    required: false
+    default: "tag:ci"
+
+runs:
+  using: composite
+  steps:
+    - name: "🧱 [1/6] Set up builder (buildx)"
+      uses: docker/setup-buildx-action@v3
+
+    - name: "🔑 [2/6] Log in to GHCR"
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.github-token }}
+
+    - name: "🏷 [3/6] Resolve image name"
+      id: meta
+      shell: bash
+      run: echo "image=ghcr.io/${GITHUB_REPOSITORY@L}" >> "$GITHUB_OUTPUT"
+
+    - name: "🐳 [4/6] Build and push image → GHCR"
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        push: true
+        tags: |
+          ${{ steps.meta.outputs.image }}:latest
+          ${{ steps.meta.outputs.image }}:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: "🔎 Check deploy settings"
+      id: ts
+      shell: bash
+      env:
+        TS_ID: ${{ inputs.ts-oauth-client-id }}
+        HOST: ${{ inputs.host }}
+      run: |
+        if [ -n "$TS_ID" ] && [ -n "$HOST" ]; then
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::host or Tailscale credentials missing — image pushed to GHCR, deploy skipped."
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: "🔗 [5/6] Connect to tailnet"
+      if: steps.ts.outputs.ok == 'true'
+      uses: tailscale/github-action@v3
+      with:
+        oauth-client-id: ${{ inputs.ts-oauth-client-id }}
+        oauth-secret: ${{ inputs.ts-oauth-secret }}
+        tags: ${{ inputs.ts-tags }}
+
+    - name: "📦 Sync compose files to the server"
+      if: steps.ts.outputs.ok == 'true'
+      shell: bash
+      env:
+        HOST: ${{ inputs.host }}
+        DIR: ${{ inputs.apps-dir }}/${{ inputs.app }}
+      run: |
+        SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 $HOST"
+        $SSH "mkdir -p $DIR"
+        # Tailscale SSH has no scp/sftp subsystem: stream each file over the shell.
+        for f in ${{ inputs.compose_files }}; do
+          $SSH "mkdir -p $DIR/$(dirname "$f") && cat > $DIR/$f" < "$f"
+        done
+
+    - name: "🚀 [6/6] Deploy to server (pull + up)"
+      if: steps.ts.outputs.ok == 'true'
+      shell: bash
+      env:
+        HOST: ${{ inputs.host }}
+        DIR: ${{ inputs.apps-dir }}/${{ inputs.app }}
+      run: |
+        FILES=""
+        for f in ${{ inputs.compose_files }}; do FILES="$FILES -f $f"; done
+        SVC="${{ inputs.service }}"
+        ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "$HOST" "
+          set -e
+          cd $DIR
+          for i in 1 2 3; do
+            docker compose $FILES pull $SVC && break
+            [ \$i -eq 3 ] && { echo 'pull failed 3 times'; exit 1; }
+            echo \"pull failed (attempt \$i), retrying in 10s...\"
+            sleep 10
+          done
+          docker compose $FILES up -d $SVC
+          docker image prune -f >/dev/null
+          docker compose $FILES ps
+        "

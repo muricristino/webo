@@ -2851,7 +2851,7 @@ pub(crate) mod tests {
         let base = mock_github().await;
         std::env::set_var("WEBO_GITHUB_API_BASE", &base);
         std::env::set_var("WEBO_GITHUB_TOKEN", "test-token");
-        std::env::set_var("WEBO_DEPLOY_TOKEN", "deploy-secret");
+        std::env::set_var("WEBO_DEPLOY_HOST", "deploy-secret");
         std::env::remove_var("TS_OAUTH_CLIENT_ID");
         std::env::remove_var("TS_OAUTH_SECRET");
 
@@ -2939,7 +2939,7 @@ pub(crate) mod tests {
         assert_eq!(json["commit_sha"], "a3f9e21fff");
         assert_eq!(json["files"].as_array().unwrap().len(), 4);
         let secrets = json["secrets"].as_array().unwrap();
-        assert_eq!(secrets.iter().find(|s| s["name"] == "WEBO_DEPLOY_TOKEN").unwrap()["status"], "created");
+        assert_eq!(secrets.iter().find(|s| s["name"] == "WEBO_DEPLOY_HOST").unwrap()["status"], "created");
         assert_eq!(secrets.iter().find(|s| s["name"] == "TS_OAUTH_CLIENT_ID").unwrap()["status"], "skipped");
         let p = api.store.project_by_slug("axofin").unwrap().unwrap();
         assert_eq!(p.status.as_deref(), Some("deploying"));
@@ -2955,7 +2955,7 @@ pub(crate) mod tests {
 
         std::env::remove_var("WEBO_GITHUB_API_BASE");
         std::env::remove_var("WEBO_GITHUB_TOKEN");
-        std::env::remove_var("WEBO_DEPLOY_TOKEN");
+        std::env::remove_var("WEBO_DEPLOY_HOST");
     }
 }
 

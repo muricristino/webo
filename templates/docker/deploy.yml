@@ -16,20 +16,14 @@ jobs:
       - name: "📥 Check out app"
         uses: actions/checkout@v4
 
-      - name: "🧰 Check out webo-deploy"
-        uses: actions/checkout@v4
-        with:
-          repository: axolutions/webo-deploy
-          token: ${{ secrets.WEBO_DEPLOY_TOKEN }}
-          path: .webo-deploy
-
       - name: "🛸 webo-deploy"
-        uses: ./.webo-deploy
+        uses: {{deploy_action}}
         with:
           app: {{slug}}
           dockerfile: Dockerfile
           compose_files: deploy/docker-compose.yml deploy/docker-compose.homelab.yml
           service: {{slug}}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          host: ${{ secrets.WEBO_DEPLOY_HOST }}
           ts-oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           ts-oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}

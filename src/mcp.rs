@@ -820,7 +820,7 @@ async fn project_status(api: Api, p: crate::store::Project, _params: Value) -> S
         // container — announces its hostname on a `webo.domain` label, which
         // lands in `domain` and not in auto/custom. Reading only those two
         // made two screens of the same panel disagree: the project list
-        // showed webo.axolutions.com.br while the status screen said "none",
+        // showed the panel's own hostname while the status screen said "none",
         // about the very domain serving the panel.
         if d.is_empty() {
             if let Some(label) = &p.domain {
@@ -2373,7 +2373,7 @@ mod tests {
         let base = crate::server::tests::mock_github().await;
         std::env::set_var("WEBO_GITHUB_API_BASE", &base);
         std::env::set_var("WEBO_GITHUB_TOKEN", "test-token");
-        std::env::set_var("WEBO_DEPLOY_TOKEN", "deploy-secret");
+        std::env::set_var("WEBO_DEPLOY_HOST", "deploy-secret");
         let api = crate::server::tests::api_with_data();
 
         let body = tool_text(
@@ -2408,7 +2408,7 @@ mod tests {
 
         std::env::remove_var("WEBO_GITHUB_API_BASE");
         std::env::remove_var("WEBO_GITHUB_TOKEN");
-        std::env::remove_var("WEBO_DEPLOY_TOKEN");
+        std::env::remove_var("WEBO_DEPLOY_HOST");
     }
 
     #[tokio::test]

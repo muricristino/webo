@@ -3,7 +3,17 @@
 
 use serde::Serialize;
 
-pub const SECRET_NAMES: [&str; 3] = ["WEBO_DEPLOY_TOKEN", "TS_OAUTH_CLIENT_ID", "TS_OAUTH_SECRET"];
+pub const SECRET_NAMES: [&str; 3] = ["WEBO_DEPLOY_HOST", "TS_OAUTH_CLIENT_ID", "TS_OAUTH_SECRET"];
+
+pub const DEFAULT_DEPLOY_ACTION: &str = "muricristino/webo/deploy-action@main";
+
+pub fn deploy_action() -> String {
+    std::env::var("WEBO_DEPLOY_ACTION")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_DEPLOY_ACTION.into())
+}
 
 #[derive(Clone, Copy, PartialEq, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -134,8 +144,10 @@ pub fn plan(
         Template::Next => "next",
         Template::Docker => "docker",
     };
+    let action = deploy_action();
     let render = |text: &str| {
-        text.replace("{{slug}}", slug)
+        text.replace("{{deploy_action}}", &action)
+            .replace("{{slug}}", slug)
             .replace("{{owner}}", owner)
             .replace("{{repo}}", repo)
             .replace("{{branch}}", branch)
@@ -261,13 +273,17 @@ mod tests {
 
     #[test]
     fn plan_renders_placeholders_and_respects_dockerfile() {
+        let _env = crate::testutil::env_lock();
+        std::env::remove_var("WEBO_DEPLOY_ACTION");
         let files = plan(Template::Rails, "axofin", "murichristopher", "axofin", "main", false, "3.3");
         assert_eq!(files.len(), 4);
         assert_eq!(files[0].path, "Dockerfile");
         let workflow = files.iter().find(|f| f.path == ".github/workflows/deploy.yml").unwrap();
         assert!(workflow.content.contains("branches: [main]"));
         assert!(workflow.content.contains("app: axofin"));
-        assert!(workflow.content.contains("${{ secrets.WEBO_DEPLOY_TOKEN }}"), "gh expressions survive");
+        assert!(workflow.content.contains("${{ secrets.WEBO_DEPLOY_HOST }}"), "gh expressions survive");
+        assert!(workflow.content.contains(&format!("uses: {DEFAULT_DEPLOY_ACTION}")));
+        assert!(!workflow.content.contains("WEBO_DEPLOY_TOKEN"), "the action is public, no token to fetch it");
         let homelab = files.iter().find(|f| f.path == "deploy/docker-compose.homelab.yml").unwrap();
         assert!(homelab.content.contains("ghcr.io/murichristopher/axofin:latest"));
         assert!(homelab.content.contains("webo.tech: ruby"));
@@ -276,10 +292,20 @@ mod tests {
         assert!(!compose.content.contains("{{"), "no placeholder left behind");
 
         // existing Dockerfile is respected
-        let files = plan(Template::Next, "landing", "axolutions", "landing", "master", true, "3.3");
+        let files = plan(Template::Next, "landing", "acme", "landing", "master", true, "3.3");
         assert_eq!(files.len(), 3);
         assert!(!files.iter().any(|f| f.path == "Dockerfile"));
         let workflow = files.iter().find(|f| f.path == ".github/workflows/deploy.yml").unwrap();
         assert!(workflow.content.contains("branches: [master]"));
+    }
+
+    #[test]
+    fn the_deploy_action_can_point_at_a_fork() {
+        let _env = crate::testutil::env_lock();
+        std::env::set_var("WEBO_DEPLOY_ACTION", "acme/webo/deploy-action@v2");
+        let files = plan(Template::Docker, "api", "acme", "api", "main", true, "3.3");
+        std::env::remove_var("WEBO_DEPLOY_ACTION");
+        let workflow = files.iter().find(|f| f.path == ".github/workflows/deploy.yml").unwrap();
+        assert!(workflow.content.contains("uses: acme/webo/deploy-action@v2"));
     }
 }

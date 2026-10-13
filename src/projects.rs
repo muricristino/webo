@@ -504,8 +504,8 @@ mod tests {
             Some(("murichristopher".into(), "codo".into()))
         );
         assert_eq!(
-            infer_repo("ghcr.io/axolutions/webo@sha256:abc"),
-            Some(("axolutions".into(), "webo".into()))
+            infer_repo("ghcr.io/acme/webo@sha256:abc"),
+            Some(("acme".into(), "webo".into()))
         );
         assert_eq!(infer_repo("cloudflare/cloudflared:latest"), None);
         assert_eq!(infer_repo("postgres:16"), None);
@@ -525,7 +525,7 @@ mod tests {
         assert_eq!(tech_from_image("postgres:16"), Some("postgres"));
         assert_eq!(tech_from_image("docker.io/library/redis:7-alpine"), Some("redis"));
         assert_eq!(tech_from_image("nginx:alpine"), Some("web"));
-        assert_eq!(tech_from_image("ghcr.io/axolutions/webo:latest"), None);
+        assert_eq!(tech_from_image("ghcr.io/acme/webo:latest"), None);
     }
 
     #[test]
