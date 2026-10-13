@@ -1,8 +1,8 @@
 # Public access through a Cloudflare Tunnel, with no port open on the host.
-# Use together with docker-compose.yml:
+#   docker network create homelab   # once; WEBO_APP_NETWORK if you use another name
 #   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --build
-# Needs deploy/cloudflared/config.yml and the tunnel credentials next to it;
-# the ingress points the hostname at http://webo:5050.
+# The tunnel is managed remotely: CLOUDFLARE_TUNNEL_TOKEN runs it, and webo writes
+# its routes through the API (WEBO_TUNNEL_ID + CLOUDFLARE_* in .env).
 services:
   webo:
     container_name: webo
@@ -13,12 +13,23 @@ services:
       - WEBO_MCP_BIND=0.0.0.0:5051
     ports: !override
       - "${WEBO_TAILSCALE_IP:-127.0.0.1}:5051:5051"
+    networks:
+      - default
+      - apps
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: webo-cloudflared
-    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
-    volumes:
-      - ./cloudflared:/etc/cloudflared:ro
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     restart: unless-stopped
+    networks:
+      - default
+      - apps
     depends_on:
       - webo
+
+networks:
+  apps:
+    external: true
+    name: ${WEBO_APP_NETWORK:-homelab}

@@ -73,10 +73,13 @@ laptop, never on a server reachable from the internet. Docker publishes ports
 around the host firewall (ufw does not see them), so `5050:5050` on a public
 machine is a public panel.
 
-To expose webo, set the Clerk keys and publish it through a Cloudflare Tunnel,
-with no port open on the host:
+To expose webo, set the Clerk keys and publish it through a remotely managed
+Cloudflare Tunnel, with no port open on the host. Put the tunnel's token in
+`CLOUDFLARE_TUNNEL_TOKEN` and its id in `WEBO_TUNNEL_ID`; webo writes the routes
+for itself and for the apps it deploys:
 
 ```
+docker network create homelab
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.tunnel.yml up -d --build
 ```
 
