@@ -1,0 +1,24 @@
+# Public access through a Cloudflare Tunnel, with no port open on the host.
+# Use together with docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --build
+# Needs deploy/cloudflared/config.yml and the tunnel credentials next to it;
+# the ingress points the hostname at http://webo:5050.
+services:
+  webo:
+    container_name: webo
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - WEBO_MCP_BIND=0.0.0.0:5051
+    ports: !override
+      - "${WEBO_TAILSCALE_IP:-127.0.0.1}:5051:5051"
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: webo-cloudflared
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    restart: unless-stopped
+    depends_on:
+      - webo
