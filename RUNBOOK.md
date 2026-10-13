@@ -6,28 +6,28 @@ here is not guessable from the code.
 
 Served to agents as the MCP resource `webo://runbook`.
 
-## The machine
+## This server
 
-One ThinkPad (`RD-007661`) running Ubuntu 24.04, acting as a small VPS on the
-home network. It has no public IP: everything reaches it through a Cloudflare
-Tunnel. The laptop lid stays closed, charging is capped for battery health, so
-a battery reading below 100% is normal and not a problem.
+What the machine is, how to reach it and what is normal on it (a battery that
+never reaches 100%, a disk that is always half full) is different on every
+server. Write it in a markdown file on the server and point `WEBO_RUNBOOK` at
+it: webo then serves that file here instead of this generic one. Copy this one
+as a start and add the machine on top.
 
 Access paths, in order of preference:
 
-1. **The panel** — `webo.axolutions.com.br`, read-only, behind Cloudflare.
+1. **The panel** — the server's public address (`WEBO_PUBLIC_URL`).
 2. **The MCP server** — port 5051, published only on the host's Tailscale
    address. webo runs in a container, which has no Tailscale interface of its
    own, so the listener binds `0.0.0.0` *inside the container* and Docker
-   publishes it on `${WEBO_TAILSCALE_IP}` only. Set that in
-   `~/apps/webo/deploy/.env` from `tailscale ip -4`; without it the port stays
-   on loopback.
-3. **SSH over Tailscale** — `homelab@<tailscale-ip>`. Last resort.
+   publishes it on `${WEBO_TAILSCALE_IP}` only. Set that in webo's `.env` from
+   `tailscale ip -4`; without it the port stays on loopback.
+3. **SSH over Tailscale** — the deploy user on the tailnet. Last resort.
 
 ## Layout on disk
 
 ```
-/home/homelab/apps/<app>/
+~/apps/<app>/          # home of the deploy user
   deploy/
     docker-compose.yml            # from the app's repo
     docker-compose.homelab.yml    # GHCR image + homelab network
@@ -75,13 +75,13 @@ by name.
 - One named tunnel, configured remotely through the API — the ingress rules live
   in Cloudflare, not in a local config file.
 - Each project gets an obscure automatic hostname on first deploy
-  (`three-words.axolutions.com.br`) that **never changes**, plus an optional
+  (`three-words.<apps zone>`, the zone in `WEBO_APPS_ZONE`) that **never changes**, plus an optional
   custom domain.
 - DNS records are CNAMEs to `<tunnel-id>.cfargotunnel.com`.
 - **Route DNS by tunnel UUID, never by name.** Naming works until it silently
   points at the wrong tunnel.
 - **Universal SSL covers only one wildcard level** on the free plan.
-  `app.axolutions.com.br` gets a certificate; `a.b.axolutions.com.br` does not.
+  `app.<zone>` gets a certificate; `a.b.<zone>` does not.
 - The 404 catch-all rule must stay last in the ingress list, and webo preserves
   any rule it does not own when it reconciles.
 

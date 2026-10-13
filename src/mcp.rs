@@ -1839,13 +1839,20 @@ async fn delete_project(api: Api, p: crate::store::Project, params: Value) -> St
 
 // ---------------------------------------------------------------- resources
 
-/// The knowledge that until now only lived in session memory.
 const RUNBOOK: &str = include_str!("../RUNBOOK.md");
+
+pub fn runbook() -> String {
+    std::env::var("WEBO_RUNBOOK")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .and_then(|p| std::fs::read_to_string(p.trim()).ok())
+        .unwrap_or_else(|| RUNBOOK.to_string())
+}
 
 async fn read_resource(api: &Api, params: &Value) -> Result<Value, String> {
     let uri = params.get("uri").and_then(|u| u.as_str()).unwrap_or("");
     let body = match uri {
-        "webo://runbook" => RUNBOOK.to_string(),
+        "webo://runbook" => runbook(),
         "webo://projects" => list_projects(api).await,
         other => return Err(format!("unknown resource: {other}")),
     };
@@ -2920,5 +2927,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(notif.status(), axum::http::StatusCode::OK);
+    }
+
+    #[test]
+    fn the_runbook_is_the_servers_own_when_configured() {
+        let _env = crate::testutil::env_lock();
+        std::env::remove_var("WEBO_RUNBOOK");
+        assert_eq!(runbook(), RUNBOOK);
+
+        let path = std::env::temp_dir().join(format!("webo-runbook-{}.md", std::process::id()));
+        std::fs::write(&path, "# This box\nA VPS in Frankfurt.").unwrap();
+        std::env::set_var("WEBO_RUNBOOK", &path);
+        assert_eq!(runbook(), "# This box\nA VPS in Frankfurt.");
+
+        std::env::set_var("WEBO_RUNBOOK", "/nonexistent/runbook.md");
+        assert_eq!(runbook(), RUNBOOK, "a missing file falls back to the generic one");
+        std::env::remove_var("WEBO_RUNBOOK");
+        let _ = std::fs::remove_file(path);
     }
 }
