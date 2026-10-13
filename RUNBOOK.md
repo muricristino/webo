@@ -62,9 +62,12 @@ by name.
 - **`env_file` resolves relative to the compose file.** The compose files live
   in `<app>/deploy/`, so the `.env` must be there too. A `.env` one level up is
   silently ignored and the app boots with no configuration.
-- **Discovery is by label.** webo finds projects through
-  `com.docker.compose.project`. A container without it becomes a
-  single-container project named after itself.
+- **Discovery is by label.** webo groups containers by
+  `com.docker.compose.project`, then by swarm stack
+  (`com.docker.stack.namespace`) or service (`com.docker.swarm.service.name`),
+  so a swarm service keeps one project across redeploys. Any other container
+  becomes a single-container project named after itself. pm2 apps on the host
+  appear when `WEBO_PM2_HOME` is set, read-only.
 - **`webo.role`** on a container marks what it is to the project (`app`,
   `database`). webo's own Postgres containers carry `webo.role=database`.
 - **Images are matched by id, not tag.** A container whose `latest` tag moved on

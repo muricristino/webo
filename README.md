@@ -53,11 +53,18 @@ allowed to change — is in [`docs/`](docs/).
 | `WEBO_ALLOWED_EMAILS` | — | who may sign in, comma-separated |
 | `WEBO_RUNBOOK` | built-in | markdown file describing this server, served to agents as `webo://runbook` |
 | `WEBO_DEPLOY_ACTION` | `muricristino/webo/deploy-action@main` | GitHub Action the deploy workflow of each app uses |
+| `WEBO_PM2_HOME` | — | the host's PM2_HOME mounted read-only; lists pm2 apps as read-only projects with their CPU, memory and logs (`deploy/docker-compose.pm2.yml`) |
 | `WEBO_DEPLOY_HOST` | — | SSH target on the tailnet (`user@address`) that apps deploy to; written to each app repo as a secret |
 
 The compose mounts (`/sys`, `/proc/net/dev`, `/etc/hostname`, `/etc/os-release`)
 are optional — without them webo still works and just hides the corresponding
 metrics.
+
+Projects are discovered from the Docker socket: a compose project is one
+project, a swarm stack or service is one project that keeps its logs and
+history across redeploys, and any other container is a project of its own.
+With `WEBO_PM2_HOME` set, pm2 apps show up too, marked `runtime: pm2`: webo
+watches them and never deploys, deletes or changes them.
 
 ## Security
 
