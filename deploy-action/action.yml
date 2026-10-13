@@ -117,12 +117,19 @@ runs:
       env:
         HOST: ${{ inputs.host }}
         DIR: ${{ inputs.apps-dir }}/${{ inputs.app }}
+        REGISTRY_TOKEN: ${{ inputs.github-token }}
       run: |
         FILES=""
         for f in ${{ inputs.compose_files }}; do FILES="$FILES -f $f"; done
         SVC="${{ inputs.service }}"
-        ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "$HOST" "
+        # The job's token pulls a private image; a throwaway DOCKER_CONFIG keeps it
+        # from replacing whatever registry login the server already has.
+        printf '%s\n' "$REGISTRY_TOKEN" | ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "$HOST" "
           set -e
+          read -r TOKEN
+          export DOCKER_CONFIG=\$(mktemp -d)
+          trap 'rm -rf \$DOCKER_CONFIG' EXIT
+          printf '%s' \"\$TOKEN\" | docker login ghcr.io -u ${{ github.actor }} --password-stdin >/dev/null
           cd $DIR
           for i in 1 2 3; do
             docker compose $FILES pull $SVC && break
