@@ -216,14 +216,6 @@ pub async fn run(store: Arc<Store>, every_secs: u64) {
         for p in projects {
             let compose = p.compose_project.clone().unwrap_or_else(|| p.slug.clone());
             for c in &containers {
-                let belongs = c
-                    .labels
-                    .as_ref()
-                    .and_then(|l| l.get(crate::projects::COMPOSE_LABEL))
-                    .is_some_and(|v| v == &compose);
-                if !belongs {
-                    continue;
-                }
                 let Some(id) = c.id.clone() else { continue };
                 let name = c
                     .names
@@ -231,6 +223,10 @@ pub async fn run(store: Arc<Store>, every_secs: u64) {
                     .and_then(|n| n.first())
                     .map(|n| n.trim_start_matches('/').to_string())
                     .unwrap_or_else(|| id.chars().take(12).collect());
+                let labels = c.labels.clone().unwrap_or_default();
+                if crate::projects::group_of(&labels, &name) != compose {
+                    continue;
+                }
                 let since = store.last_log_ts(p.id, &name).ok().flatten();
                 let fetched = fetch(&docker, &id, since).await;
                 let already = match since {

@@ -16,6 +16,17 @@ use tokio::sync::RwLock;
 
 pub const COMPOSE_LABEL: &str = "com.docker.compose.project";
 pub const DOMAIN_LABEL: &str = "webo.domain";
+pub const STACK_LABEL: &str = "com.docker.stack.namespace";
+pub const SWARM_SERVICE_LABEL: &str = "com.docker.swarm.service.name";
+
+// A swarm task is named `<service>.<slot>.<task id>` and gets a new id on
+// every redeploy, so it is grouped by its stack or service instead.
+pub fn group_of(labels: &HashMap<String, String>, container_name: &str) -> String {
+    [COMPOSE_LABEL, STACK_LABEL, SWARM_SERVICE_LABEL]
+        .iter()
+        .find_map(|k| labels.get(*k).filter(|v| !v.is_empty()).cloned())
+        .unwrap_or_else(|| container_name.to_string())
+}
 
 /// `ghcr.io/owner/name[:tag|@digest]` → (owner, name). Anything else → None.
 pub fn infer_repo(image: &str) -> Option<(String, String)> {
@@ -181,7 +192,7 @@ pub async fn run(state: Arc<RwLock<State>>, store: Arc<Store>, sample_secs: u64)
                 .and_then(|n| n.first())
                 .map(|n| n.trim_start_matches('/').to_string())
                 .unwrap_or_else(|| id.chars().take(12).collect());
-            let compose = labels.get(COMPOSE_LABEL).cloned().unwrap_or_else(|| name.clone());
+            let compose = group_of(&labels, &name);
             let slug = slug_for(&compose);
             let image = c.image.clone().unwrap_or_default();
 
@@ -285,20 +296,6 @@ pub async fn run(state: Arc<RwLock<State>>, store: Arc<Store>, sample_secs: u64)
             }
         }
         prev.retain(|k, _| seen_ids.contains(k));
-
-        // persist discoveries (never clobbering user-made links)
-        for (slug, (compose, repo, domain, tech)) in &group_meta {
-            let _ = store.upsert_discovered(
-                slug,
-                compose,
-                repo.as_ref().map(|(o, n)| (o.as_str(), n.as_str())),
-                domain.as_deref(),
-                now as i64,
-            );
-            if let Some(t) = tech {
-                let _ = store.set_tech_if_empty(slug, t);
-            }
-        }
 
         // merge into shared state, carrying history forward
         let mut st = state.write().await;
@@ -646,5 +643,24 @@ mod tests {
         }
         assert_eq!(live.history.len(), HISTORY_CAP);
         assert_eq!(live.history.front().unwrap().ts, 5);
+    }
+
+    #[test]
+    fn a_swarm_task_belongs_to_its_service_and_compose_still_wins() {
+        let labels = |pairs: &[(&str, &str)]| {
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<std::collections::HashMap<_, _>>()
+        };
+        let task = "cosmosapi.1.xzzji63akynifz11pcfk7kajv";
+        let swarm = labels(&[(super::SWARM_SERVICE_LABEL, "cosmosapi")]);
+        assert_eq!(super::group_of(&swarm, task), "cosmosapi");
+        let redeployed = labels(&[(super::SWARM_SERVICE_LABEL, "cosmosapi")]);
+        assert_eq!(super::group_of(&redeployed, "cosmosapi.1.newtaskid"), "cosmosapi", "stable across redeploys");
+        let stack = labels(&[(super::SWARM_SERVICE_LABEL, "shop_api"), (super::STACK_LABEL, "shop")]);
+        assert_eq!(super::group_of(&stack, "shop_api.1.abc"), "shop");
+        let compose = labels(&[(super::COMPOSE_LABEL, "codo"), (super::SWARM_SERVICE_LABEL, "x")]);
+        assert_eq!(super::group_of(&compose, "codo-app-1"), "codo");
+        let empty = labels(&[(super::COMPOSE_LABEL, "")]);
+        assert_eq!(super::group_of(&empty, "lonely"), "lonely");
+        assert_eq!(super::group_of(&labels(&[]), "lonely"), "lonely");
     }
 }
